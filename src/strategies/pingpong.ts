@@ -1,12 +1,47 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction } from '@solana/web3.js';
 import { EventEmitter } from 'events';
 import { Token } from '../interfaces/config';
 import { SimulationResult, TradeResult, TradingStrategy } from '../interfaces/strategy';
-import { Jupiter, RouteInfo, TOKEN_LIST_URL } from '@jup-ag/core';
-import JSBI from 'jsbi';
+import axios from 'axios';
+import { TransactionUtils } from '../utils/transaction';
 
 /**
- * Implementation of the PingPong trading strategy
+ * Jupiter V6 API interface (simplified for our needs)
+ */
+interface JupiterQuoteResponse {
+  data: {
+    inputMint: string;
+    outputMint: string;
+    inAmount: string;
+    outAmount: string;
+    otherAmountThreshold: string;
+    swapMode: string;
+    slippageBps: number;
+    platformFee: { amount: string; feeBps: number };
+    priceImpactPct: string;
+    routePlan: Array<{
+      swapInfo: {
+        ammKey: string;
+        label: string;
+        inputMint: string;
+        outputMint: string;
+        inAmount: string;
+        outAmount: string;
+        feeAmount: string;
+        feeMint: string;
+      };
+    }>;
+    contextSlot: number;
+    timeTaken: number;
+  }[];
+}
+
+interface JupiterSwapResponse {
+  swapTransaction: string;
+}
+
+/**
+ * Implementation of the PingPong trading strategy using Jupiter v6 API
  */
 export default class PingPongStrategy implements TradingStrategy {
   public name = 'pingpong';
@@ -14,10 +49,11 @@ export default class PingPongStrategy implements TradingStrategy {
   
   private connection: Connection;
   private eventEmitter: EventEmitter;
-  private jupiter: Jupiter | null = null;
+  private jupiterApiBaseUrl = 'https://quote-api.jup.ag/v6';
   private tokenMap: Map<string, any> = new Map();
   private direction: 'ping' | 'pong' = 'ping';
   private errorCount = 0;
+  private wallet: any = null;
   private lastTrade: {
     inputToken: Token;
     outputToken: Token;
@@ -38,20 +74,20 @@ export default class PingPongStrategy implements TradingStrategy {
     // Initialize Jupiter SDK
     try {
       // Load token list
-      const tokens = await (await fetch(TOKEN_LIST_URL[1])).json();
+      const tokenListResponse = await axios.get('https://token.jup.ag/all');
+      const tokens = tokenListResponse.data;
+      
       for (const token of tokens) {
         this.tokenMap.set(token.address, token);
       }
       
-      // Initialize Jupiter
-      this.jupiter = await Jupiter.load({
-        connection,
-        cluster: 'mainnet-beta',
-        restrictIntermediateTokens: false,
-        wrapUnwrapSOL: true,
-      });
+      // Setup wallet from environment (for real trading)
+      this.wallet = TransactionUtils.loadWallet();
+      if (!this.wallet) {
+        console.warn('No wallet loaded. Will operate in simulation-only mode.');
+      }
       
-      console.log('PingPong strategy initialized');
+      console.log('PingPong strategy initialized with Jupiter v6 API');
     } catch (error) {
       console.error('Failed to initialize Jupiter:', error);
       throw error;
@@ -72,14 +108,14 @@ export default class PingPongStrategy implements TradingStrategy {
     amount: number,
     slippage: number
   ): Promise<TradeResult> {
-    if (!this.jupiter) {
+    if (!this.wallet) {
       return {
         success: false,
         inputAmount: amount,
         outputAmount: 0,
         profit: 0,
         profitPercentage: 0,
-        error: 'Jupiter not initialized',
+        error: 'No wallet available for execution',
         latency: 0
       };
     }
@@ -87,19 +123,22 @@ export default class PingPongStrategy implements TradingStrategy {
     const startTime = Date.now();
     
     try {
-      // Convert amount to JSBI
-      const amountInJSBI = JSBI.BigInt(amount * (10 ** inputToken.decimals));
+      // Convert amount to atomic units (considering token decimals)
+      const amountInAtomic = Math.floor(amount * Math.pow(10, inputToken.decimals)).toString();
       
-      // Compute routes
-      const routes = await this.jupiter.computeRoutes({
-        inputMint: new PublicKey(inputToken.address),
-        outputMint: new PublicKey(outputToken.address),
-        amount: amountInJSBI,
-        slippageBps: slippage,
-        forceFetch: true,
+      // 1. Get quote from Jupiter API
+      const quoteResponse = await axios.get<JupiterQuoteResponse>(`${this.jupiterApiBaseUrl}/quote`, {
+        params: {
+          inputMint: inputToken.address,
+          outputMint: outputToken.address,
+          amount: amountInAtomic,
+          slippageBps: slippage,
+          onlyDirectRoutes: false,
+          asLegacyTransaction: true
+        }
       });
       
-      if (routes.routesInfos.length === 0) {
+      if (!quoteResponse.data || quoteResponse.data.data.length === 0) {
         return {
           success: false,
           inputAmount: amount,
@@ -112,17 +151,27 @@ export default class PingPongStrategy implements TradingStrategy {
       }
       
       // Get best route
-      const bestRoute = routes.routesInfos[0];
+      const bestRoute = quoteResponse.data.data[0];
       
-      // Execute exchange
-      const { execute } = await this.jupiter.exchange({
-        routeInfo: bestRoute
+      // 2. Get swap transaction
+      const swapResponse = await axios.post<JupiterSwapResponse>(`${this.jupiterApiBaseUrl}/swap`, {
+        quoteResponse: bestRoute,
+        userPublicKey: this.wallet.publicKey.toString(),
+        wrapAndUnwrapSol: true
       });
       
-      const result = await execute();
+      // 3. Execute the transaction
+      const swapTransactionBuf = Buffer.from(swapResponse.data.swapTransaction, 'base64');
+      const transaction = Transaction.from(swapTransactionBuf);
       
-      // Calculate output amount and profit
-      const outputAmount = Number(bestRoute.outAmount) / (10 ** outputToken.decimals);
+      // 4. Send and confirm transaction
+      const signature = await this.connection.sendTransaction(transaction, [this.wallet]);
+      
+      // 5. Wait for confirmation
+      const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+      
+      // Calculate output amount
+      const outputAmount = parseInt(bestRoute.outAmount) / Math.pow(10, outputToken.decimals);
       
       // For ping-pong, we need to compare with the last trade in the opposite direction
       let profit = 0;
@@ -155,8 +204,8 @@ export default class PingPongStrategy implements TradingStrategy {
         outputAmount,
         profit,
         profitPercentage,
-        txId: result.txid,
-        fees: bestRoute.totalFees,
+        txId: signature,
+        fees: 0, // No direct fees info from API
         latency: Date.now() - startTime
       };
     } catch (error) {
@@ -194,34 +243,24 @@ export default class PingPongStrategy implements TradingStrategy {
     outputToken: Token,
     amount: number
   ): Promise<SimulationResult> {
-    if (!this.jupiter) {
-      return {
-        success: false,
-        inputAmount: amount,
-        outputAmount: 0,
-        expectedProfit: 0,
-        expectedProfitPercentage: 0,
-        error: 'Jupiter not initialized',
-        latency: 0
-      };
-    }
-    
     const startTime = Date.now();
     
     try {
-      // Convert amount to JSBI
-      const amountInJSBI = JSBI.BigInt(amount * (10 ** inputToken.decimals));
+      // Convert amount to atomic units (considering token decimals)
+      const amountInAtomic = Math.floor(amount * Math.pow(10, inputToken.decimals)).toString();
       
-      // Compute routes
-      const routes = await this.jupiter.computeRoutes({
-        inputMint: new PublicKey(inputToken.address),
-        outputMint: new PublicKey(outputToken.address),
-        amount: amountInJSBI,
-        slippageBps: 0, // No slippage for simulation
-        forceFetch: true,
+      // Get quote from Jupiter API for the first leg
+      const quoteResponse = await axios.get<JupiterQuoteResponse>(`${this.jupiterApiBaseUrl}/quote`, {
+        params: {
+          inputMint: inputToken.address,
+          outputMint: outputToken.address,
+          amount: amountInAtomic,
+          slippageBps: 0, // No slippage for simulation
+          onlyDirectRoutes: false
+        }
       });
       
-      if (routes.routesInfos.length === 0) {
+      if (!quoteResponse.data || quoteResponse.data.data.length === 0) {
         return {
           success: false,
           inputAmount: amount,
@@ -234,10 +273,10 @@ export default class PingPongStrategy implements TradingStrategy {
       }
       
       // Get best route
-      const bestRoute = routes.routesInfos[0];
+      const bestRoute = quoteResponse.data.data[0];
       
-      // Calculate output amount and expected profit
-      const outputAmount = Number(bestRoute.outAmount) / (10 ** outputToken.decimals);
+      // Calculate output amount
+      const outputAmount = parseInt(bestRoute.outAmount) / Math.pow(10, outputToken.decimals);
       
       // For ping-pong, profit is only realized after a round trip
       let expectedProfit = 0;
@@ -245,20 +284,24 @@ export default class PingPongStrategy implements TradingStrategy {
       
       if (this.direction === 'ping') {
         // For 'ping', we simulate the round trip
-        const pongAmountJSBI = bestRoute.outAmount;
+        const pongAmount = outputAmount;
+        const pongAmountAtomic = Math.floor(pongAmount * Math.pow(10, outputToken.decimals)).toString();
         
         // Simulate pong trade (back to original token)
-        const pongRoutes = await this.jupiter.computeRoutes({
-          inputMint: new PublicKey(outputToken.address),
-          outputMint: new PublicKey(inputToken.address),
-          amount: pongAmountJSBI,
-          slippageBps: 0,
-          forceFetch: true,
+        const pongQuoteResponse = await axios.get<JupiterQuoteResponse>(`${this.jupiterApiBaseUrl}/quote`, {
+          params: {
+            inputMint: outputToken.address,
+            outputMint: inputToken.address,
+            amount: pongAmountAtomic,
+            slippageBps: 0, // No slippage for simulation
+            onlyDirectRoutes: false
+          }
         });
         
-        if (pongRoutes.routesInfos.length > 0) {
+        if (pongQuoteResponse.data && pongQuoteResponse.data.data.length > 0) {
           // Simulate complete round trip
-          const roundTripAmount = Number(pongRoutes.routesInfos[0].outAmount) / (10 ** inputToken.decimals);
+          const roundTripOutput = pongQuoteResponse.data.data[0];
+          const roundTripAmount = parseInt(roundTripOutput.outAmount) / Math.pow(10, inputToken.decimals);
           
           expectedProfit = roundTripAmount - amount;
           expectedProfitPercentage = (expectedProfit / amount) * 100;

@@ -1,12 +1,48 @@
-import { Connection, PublicKey } from '@solana/web3.js';
+import { Connection, PublicKey, Transaction, TransactionInstruction } from '@solana/web3.js';
 import { EventEmitter } from 'events';
 import { Token } from '../interfaces/config';
 import { SimulationResult, TradeResult, TradingStrategy } from '../interfaces/strategy';
-import { Jupiter, RouteInfo, TOKEN_LIST_URL } from '@jup-ag/core';
+import axios from 'axios';
 import JSBI from 'jsbi';
+import { TransactionUtils } from '../utils/transaction';
 
 /**
- * Implementation of the arbitrage trading strategy
+ * Jupiter V6 API interface (simplified for our needs)
+ */
+interface JupiterQuoteResponse {
+  data: {
+    inputMint: string;
+    outputMint: string;
+    inAmount: string;
+    outAmount: string;
+    otherAmountThreshold: string;
+    swapMode: string;
+    slippageBps: number;
+    platformFee: { amount: string; feeBps: number };
+    priceImpactPct: string;
+    routePlan: Array<{
+      swapInfo: {
+        ammKey: string;
+        label: string;
+        inputMint: string;
+        outputMint: string;
+        inAmount: string;
+        outAmount: string;
+        feeAmount: string;
+        feeMint: string;
+      };
+    }>;
+    contextSlot: number;
+    timeTaken: number;
+  }[];
+}
+
+interface JupiterSwapResponse {
+  swapTransaction: string;
+}
+
+/**
+ * Implementation of the arbitrage trading strategy using Jupiter v6 API
  */
 export default class ArbitrageStrategy implements TradingStrategy {
   public name = 'arbitrage';
@@ -14,9 +50,10 @@ export default class ArbitrageStrategy implements TradingStrategy {
   
   private connection: Connection;
   private eventEmitter: EventEmitter;
-  private jupiter: Jupiter | null = null;
+  private jupiterApiBaseUrl = 'https://quote-api.jup.ag/v6';
   private tokenMap: Map<string, any> = new Map();
   private errorCount = 0;
+  private wallet: any = null;
   
   /**
    * Initialize the arbitrage strategy
@@ -30,20 +67,20 @@ export default class ArbitrageStrategy implements TradingStrategy {
     // Initialize Jupiter SDK
     try {
       // Load token list
-      const tokens = await (await fetch(TOKEN_LIST_URL[1])).json();
+      const tokenListResponse = await axios.get('https://token.jup.ag/all');
+      const tokens = tokenListResponse.data;
+      
       for (const token of tokens) {
         this.tokenMap.set(token.address, token);
       }
       
-      // Initialize Jupiter
-      this.jupiter = await Jupiter.load({
-        connection,
-        cluster: 'mainnet-beta',
-        restrictIntermediateTokens: false,
-        wrapUnwrapSOL: true,
-      });
+      // Setup wallet from environment (for real trading)
+      this.wallet = TransactionUtils.loadWallet();
+      if (!this.wallet) {
+        console.warn('No wallet loaded. Will operate in simulation-only mode.');
+      }
       
-      console.log('Arbitrage strategy initialized');
+      console.log('Arbitrage strategy initialized with Jupiter v6 API');
     } catch (error) {
       console.error('Failed to initialize Jupiter:', error);
       throw error;
@@ -64,14 +101,14 @@ export default class ArbitrageStrategy implements TradingStrategy {
     amount: number,
     slippage: number
   ): Promise<TradeResult> {
-    if (!this.jupiter) {
+    if (!this.wallet) {
       return {
         success: false,
         inputAmount: amount,
         outputAmount: 0,
         profit: 0,
         profitPercentage: 0,
-        error: 'Jupiter not initialized',
+        error: 'No wallet available for execution',
         latency: 0
       };
     }
@@ -79,19 +116,22 @@ export default class ArbitrageStrategy implements TradingStrategy {
     const startTime = Date.now();
     
     try {
-      // Convert amount to JSBI
-      const amountInJSBI = JSBI.BigInt(amount * (10 ** inputToken.decimals));
+      // Convert amount to atomic units (considering token decimals)
+      const amountInAtomic = Math.floor(amount * Math.pow(10, inputToken.decimals)).toString();
       
-      // Compute routes
-      const routes = await this.jupiter.computeRoutes({
-        inputMint: new PublicKey(inputToken.address),
-        outputMint: new PublicKey(outputToken.address),
-        amount: amountInJSBI,
-        slippageBps: slippage,
-        forceFetch: true,
+      // 1. Get quote from Jupiter API
+      const quoteResponse = await axios.get<JupiterQuoteResponse>(`${this.jupiterApiBaseUrl}/quote`, {
+        params: {
+          inputMint: inputToken.address,
+          outputMint: outputToken.address,
+          amount: amountInAtomic,
+          slippageBps: slippage,
+          onlyDirectRoutes: false,
+          asLegacyTransaction: true
+        }
       });
       
-      if (routes.routesInfos.length === 0) {
+      if (!quoteResponse.data || quoteResponse.data.data.length === 0) {
         return {
           success: false,
           inputAmount: amount,
@@ -104,17 +144,27 @@ export default class ArbitrageStrategy implements TradingStrategy {
       }
       
       // Get best route
-      const bestRoute = routes.routesInfos[0];
+      const bestRoute = quoteResponse.data.data[0];
       
-      // Execute exchange
-      const { execute } = await this.jupiter.exchange({
-        routeInfo: bestRoute
+      // 2. Get swap transaction
+      const swapResponse = await axios.post<JupiterSwapResponse>(`${this.jupiterApiBaseUrl}/swap`, {
+        quoteResponse: bestRoute,
+        userPublicKey: this.wallet.publicKey.toString(),
+        wrapAndUnwrapSol: true
       });
       
-      const result = await execute();
+      // 3. Execute the transaction
+      const swapTransactionBuf = Buffer.from(swapResponse.data.swapTransaction, 'base64');
+      const transaction = Transaction.from(swapTransactionBuf);
+      
+      // 4. Send and confirm transaction
+      const signature = await this.connection.sendTransaction(transaction, [this.wallet]);
+      
+      // 5. Wait for confirmation
+      const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
       
       // Calculate output amount and profit
-      const outputAmount = Number(bestRoute.outAmount) / (10 ** outputToken.decimals);
+      const outputAmount = parseInt(bestRoute.outAmount) / Math.pow(10, outputToken.decimals);
       const profit = outputAmount - amount;
       const profitPercentage = (profit / amount) * 100;
       
@@ -124,8 +174,8 @@ export default class ArbitrageStrategy implements TradingStrategy {
         outputAmount,
         profit,
         profitPercentage,
-        txId: result.txid,
-        fees: bestRoute.totalFees,
+        txId: signature,
+        fees: 0, // No direct fees info from API
         latency: Date.now() - startTime
       };
     } catch (error) {
@@ -163,34 +213,25 @@ export default class ArbitrageStrategy implements TradingStrategy {
     outputToken: Token,
     amount: number
   ): Promise<SimulationResult> {
-    if (!this.jupiter) {
-      return {
-        success: false,
-        inputAmount: amount,
-        outputAmount: 0,
-        expectedProfit: 0,
-        expectedProfitPercentage: 0,
-        error: 'Jupiter not initialized',
-        latency: 0
-      };
-    }
-    
     const startTime = Date.now();
     
     try {
-      // Convert amount to JSBI
-      const amountInJSBI = JSBI.BigInt(amount * (10 ** inputToken.decimals));
+      // Convert amount to atomic units (considering token decimals)
+      const amountInAtomic = Math.floor(amount * Math.pow(10, inputToken.decimals)).toString();
       
-      // Compute routes
-      const routes = await this.jupiter.computeRoutes({
-        inputMint: new PublicKey(inputToken.address),
-        outputMint: new PublicKey(outputToken.address),
-        amount: amountInJSBI,
-        slippageBps: 0, // No slippage for simulation
-        forceFetch: true,
+      // Get quote from Jupiter API
+      const quoteResponse = await axios.get<JupiterQuoteResponse>(`${this.jupiterApiBaseUrl}/quote`, {
+        params: {
+          inputMint: inputToken.address,
+          outputMint: outputToken.address,
+          amount: amountInAtomic,
+          slippageBps: 0, // No slippage for simulation
+          onlyDirectRoutes: false,
+          asLegacyTransaction: true
+        }
       });
       
-      if (routes.routesInfos.length === 0) {
+      if (!quoteResponse.data || quoteResponse.data.data.length === 0) {
         return {
           success: false,
           inputAmount: amount,
@@ -203,10 +244,10 @@ export default class ArbitrageStrategy implements TradingStrategy {
       }
       
       // Get best route
-      const bestRoute = routes.routesInfos[0];
+      const bestRoute = quoteResponse.data.data[0];
       
       // Calculate output amount and profit
-      const outputAmount = Number(bestRoute.outAmount) / (10 ** outputToken.decimals);
+      const outputAmount = parseInt(bestRoute.outAmount) / Math.pow(10, outputToken.decimals);
       const expectedProfit = outputAmount - amount;
       const expectedProfitPercentage = (expectedProfit / amount) * 100;
       
