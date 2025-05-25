@@ -47,6 +47,9 @@ typings/
 # TypeScript cache
 *.tsbuildinfo
 
+# TypeScript output directory
+dist/
+
 # Optional npm cache directory
 .npm
 
@@ -118,3 +121,13 @@ temp/*
 # Qodana
 .idea
 qodana.yaml
+
+# Jest
+coverage/
+
+# Redis
+dump.rdb
+
+# PostgreSQL
+*.sql
+*.dump
