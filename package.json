@@ -6,48 +6,53 @@
 		"type": "git",
 		"url": "https://github.com/ARBProtocol/solana-jupiter-bot.git"
 	},
-	"bin": "./src/index.js",
+	"bin": "./dist/index.js",
 	"engines": {
 		"node": ">=16"
 	},
 	"scripts": {
-		"wizard": "node ./src/index.js",
-		"start": "node --no-deprecation ./src/index.js && node --no-deprecation ./src/bot/index.js",
-		"trade": "node --no-deprecation ./src/bot/index.js",
-		"test": "xo && ava",
-		"transaction": "node ./src/utils/transaction.js"
+		"build": "tsc",
+		"wizard": "ts-node ./src/index.ts",
+		"start": "ts-node --no-deprecation ./src/index.ts && ts-node --no-deprecation ./src/bot/index.ts",
+		"start:prod": "node --no-deprecation ./dist/index.js && node --no-deprecation ./dist/bot/index.js",
+		"trade": "ts-node --no-deprecation ./src/bot/index.ts",
+		"trade:prod": "node --no-deprecation ./dist/bot/index.js",
+		"test": "jest",
+		"transaction": "ts-node ./src/utils/transaction.ts",
+		"lint": "eslint . --ext .ts,.tsx",
+		"lint:fix": "eslint . --ext .ts,.tsx --fix"
 	},
 	"files": [
-		"./src/index.js",
-		"./src/generator.js"
+		"./dist"
 	],
 	"dependencies": {
 		"@coral-xyz/anchor": "^0",
-		"@jup-ag/core": "^4.0.0-beta.21",
-		"@solana/web3.js": "^1.66.1",
+		"@jup-ag/core": "^6.0.0",
+		"@solana/web3.js": "^1.87.0",
 		"asciichart": "^1.5.25",
-		"axios": "^0.27.2",
+		"axios": "^1.6.2",
 		"bs58": "^5.0.0",
-		"cliui": "^7.0.4",
-		"express": "4.17.1",
-		"gradient-string": "^2.0.1",
-		"import-jsx": "^4.0.1",
-		"ink": "^3.2.0",
-		"ink-big-text": "^1.2.0",
+		"cliui": "^8.0.1",
+		"dotenv": "^16.3.1",
+		"express": "^4.18.2",
+		"gradient-string": "^2.0.2",
+		"import-jsx": "^5.0.0",
+		"ink": "^4.4.1",
+		"ink-big-text": "^2.0.0",
 		"ink-divider": "^3.0.0",
 		"ink-gradient": "^2.0.0",
-		"ink-select-input": "^4.2.1",
-		"ink-spinner": "^4.0.3",
-		"ink-text-input": "^4.0.3",
+		"ink-select-input": "^5.0.0",
+		"ink-spinner": "^5.0.0",
+		"ink-text-input": "^5.0.1",
 		"jsbi": "^4.3.0",
 		"keypress": "^0.2.1",
-		"meow": "^9.0.0",
-		"moment": "^2.29.3",
-		"open": "^8.4.0",
+		"meow": "^12.1.1",
+		"moment": "^2.29.4",
+		"open": "^9.1.0",
 		"ora-classic": "^5.4.2",
 		"promise-retry": "^2.0.1",
-		"react": "^17.0.2",
-		"strip-ansi": "^7.0.1"
+		"react": "^18.2.0",
+		"strip-ansi": "^7.1.0"
 	},
 	"ava": {
 		"require": [
@@ -57,30 +62,41 @@
 	"babel": {
 		"presets": [
 			"@babel/preset-env",
-			"@babel/preset-react"
+			"@babel/preset-react",
+			"@babel/preset-typescript"
 		]
 	},
-	"xo": {
-		"extends": "xo-react",
-		"rules": {
-			"react/prop-types": "off"
-		}
+	"jest": {
+		"preset": "ts-jest",
+		"testEnvironment": "node",
+		"testMatch": ["**/tests/**/*.test.ts"]
 	},
 	"devDependencies": {
-		"@ava/babel": "^2.0.0",
-		"@babel/preset-env": "^7.18.2",
-		"@babel/preset-react": "^7.17.12",
-		"@babel/register": "^7.17.7",
+		"@babel/preset-env": "^7.23.3",
+		"@babel/preset-react": "^7.23.3",
+		"@babel/preset-typescript": "^7.23.3",
+		"@babel/register": "^7.22.15",
+		"@types/express": "^4.17.21",
+		"@types/gradient-string": "^1.1.5",
+		"@types/jest": "^29.5.10",
+		"@types/keypress": "^2.0.30",
+		"@types/node": "^20.9.4",
+		"@types/promise-retry": "^1.1.6",
+		"@types/react": "^18.2.38",
+		"@typescript-eslint/eslint-plugin": "^6.12.0",
+		"@typescript-eslint/parser": "^6.12.0",
 		"chalk": "^4.1.2",
-		"eslint": "^8.19.0",
-		"eslint-config-prettier": "^8.5.0",
+		"eslint": "^8.54.0",
+		"eslint-config-prettier": "^9.0.0",
 		"eslint-config-xo-react": "^0.27.0",
-		"eslint-plugin-prettier": "^4.2.1",
-		"eslint-plugin-react": "^7.30.1",
-		"eslint-plugin-react-hooks": "^4.5.0",
-		"ink-testing-library": "^2.1.0",
-		"prettier": "2.7.1",
-		"typescript": "^4.6.4"
+		"eslint-plugin-prettier": "^5.0.1",
+		"eslint-plugin-react": "^7.33.2",
+		"eslint-plugin-react-hooks": "^4.6.0",
+		"jest": "^29.7.0",
+		"prettier": "3.1.0",
+		"ts-jest": "^29.1.1",
+		"ts-node": "^10.9.1",
+		"typescript": "^5.3.2"
 	},
 	"resolutions": {
 		"@solana/buffer-layout": "4.0.0"
