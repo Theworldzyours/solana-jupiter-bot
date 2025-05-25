@@ -1,0 +1,40 @@
+version: '3.8'
+
+services:
+  solana-jupiter-bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - bot-network
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - bot-network
+
+  postgres:
+    image: postgres:14-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-jupiterbot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-password}
+      POSTGRES_DB: ${DB_NAME:-jupiterbot}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - bot-network
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+  postgres-data:
