@@ -1,9 +1,4 @@
-import {
-	Connection,
-	PublicKey,
-	Transaction,
-	TransactionInstruction,
-} from "@solana/web3.js";
+import { Connection, Transaction, Keypair } from "@solana/web3.js";
 import { EventEmitter } from "events";
 import { Token } from "../interfaces/config";
 import {
@@ -12,7 +7,6 @@ import {
 	TradingStrategy,
 } from "../interfaces/strategy";
 import axios from "axios";
-import JSBI from "jsbi";
 import { TransactionUtils } from "../utils/transaction";
 
 /**
@@ -61,9 +55,9 @@ export default class ArbitrageStrategy implements TradingStrategy {
 	private connection!: Connection;
 	private eventEmitter!: EventEmitter;
 	private jupiterApiBaseUrl = "https://quote-api.jup.ag/v6";
-	private tokenMap: Map<string, any> = new Map();
+	private tokenMap: Map<string, Record<string, unknown>> = new Map();
 	private errorCount = 0;
-	private wallet: any = null;
+	private wallet: Keypair | null = null;
 
 	/**
 	 * Initialize the arbitrage strategy
@@ -187,10 +181,7 @@ export default class ArbitrageStrategy implements TradingStrategy {
 			]);
 
 			// 5. Wait for confirmation
-			const confirmation = await this.connection.confirmTransaction(
-				signature,
-				"confirmed",
-			);
+			await this.connection.confirmTransaction(signature, "confirmed");
 
 			// Calculate output amount and profit
 			const outputAmount =

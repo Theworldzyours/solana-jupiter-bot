@@ -110,4 +110,22 @@ export class TokenUtils {
 			return null;
 		}
 	}
+
+	/**
+	 * Format token amount to human readable with commas and decimal places
+	 * @param amount Token amount to format
+	 * @param decimals Token decimals
+	 * @param displayDecimals Number of decimal places to display (default 2)
+	 * @returns Formatted string representation of token amount
+	 */
+	public static formatTokenAmount(
+		amount: number,
+		decimals: number,
+		displayDecimals = 2,
+	): string {
+		return amount.toLocaleString(undefined, {
+			minimumFractionDigits: displayDecimals,
+			maximumFractionDigits: displayDecimals,
+		});
+	}
 }

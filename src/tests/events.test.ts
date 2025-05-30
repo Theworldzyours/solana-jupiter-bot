@@ -5,7 +5,7 @@ describe("EventBus", () => {
 
 	beforeEach(() => {
 		// Reset the EventBus instance for each test
-		// @ts-ignore - Access private static instance for testing purposes
+		// @ts-expect-error - Access private static instance for testing purposes
 		EventBus.instance = undefined;
 
 		eventBus = EventBus.getInstance();
@@ -45,7 +45,7 @@ describe("EventBus", () => {
 	it("should remove event listeners", () => {
 		let callCount = 0;
 
-		const handler = () => {
+		const handler = (): void => {
 			callCount++;
 		};
 

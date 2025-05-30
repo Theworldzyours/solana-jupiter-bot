@@ -71,7 +71,7 @@
 	"jest": {
 		"preset": "ts-jest",
 		"testEnvironment": "node",
-		"testMatch": ["**/tests/**/*.test.ts"]
+		"testMatch": ["**/tests/**/*.test.ts", "**/test/**/*.test.ts"]
 	},
 	"devDependencies": {
 		"@babel/preset-env": "^7.23.3",

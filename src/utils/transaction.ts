@@ -1,11 +1,11 @@
 import {
 	Connection,
 	Keypair,
-	PublicKey,
 	Transaction,
-	TransactionInstruction,
 	sendAndConfirmTransaction,
 	SendOptions,
+	ParsedTransactionWithMeta,
+	SignatureStatus,
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import * as dotenv from "dotenv";
@@ -116,7 +116,11 @@ export class TransactionUtils {
 	public static async getTransactionStatus(
 		connection: Connection,
 		signature: string,
-	): Promise<any> {
+	): Promise<{
+		status: SignatureStatus | null;
+		transaction: ParsedTransactionWithMeta | null;
+		signature: string;
+	}> {
 		try {
 			// Get transaction status
 			const status = await connection.getSignatureStatus(signature, {
@@ -127,7 +131,7 @@ export class TransactionUtils {
 			const transaction = await connection.getParsedTransaction(signature);
 
 			return {
-				status,
+				status: status.value,
 				transaction,
 				signature,
 			};

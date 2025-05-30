@@ -1,4 +1,4 @@
-import { Connection, PublicKey, Transaction } from "@solana/web3.js";
+import { Connection, Transaction, Keypair } from "@solana/web3.js";
 import { EventEmitter } from "events";
 import { Token } from "../interfaces/config";
 import {
@@ -55,10 +55,10 @@ export default class PingPongStrategy implements TradingStrategy {
 	private connection!: Connection;
 	private eventEmitter!: EventEmitter;
 	private jupiterApiBaseUrl = "https://quote-api.jup.ag/v6";
-	private tokenMap: Map<string, any> = new Map();
+	private tokenMap: Map<string, Record<string, unknown>> = new Map();
 	private direction: "ping" | "pong" = "ping";
 	private errorCount = 0;
-	private wallet: any = null;
+	private wallet: Keypair | null = null;
 	private lastTrade: {
 		inputToken: Token;
 		outputToken: Token;
@@ -189,10 +189,7 @@ export default class PingPongStrategy implements TradingStrategy {
 			]);
 
 			// 5. Wait for confirmation
-			const confirmation = await this.connection.confirmTransaction(
-				signature,
-				"confirmed",
-			);
+			await this.connection.confirmTransaction(signature, "confirmed");
 
 			// Calculate output amount
 			const outputAmount =
